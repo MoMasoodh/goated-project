@@ -1,0 +1,37 @@
+{
+    "compilerOptions": {
+        "target": "esnext",
+        "module": "nodenext",
+        "moduleResolution": "nodenext",
+        "lib": ["ESNext"],
+        "outDir": "build",
+        "rootDir": "src", // Changed back to "." to include scripts directory
+        "sourceMap": true,
+        "strict": false,
+        "esModuleInterop": true,
+        "sourceRoot": "./src",
+        "resolveJsonModule": true,
+        "allowArbitraryExtensions": false,
+        "incremental": true,
+        "paths": {
+            "#root/*": ["./*"],
+            "#shared/*": ["./shared/*"],
+            "#auth/*": ["./modules/auth/*"],
+            "#genai/*": ["./modules/genai/*"],
+            "#users/*": ["./modules/users/*"],
+            "#livequizzes/*": ["./modules/livequizzes/*"],
+        },
+        "types": ["node", "express", "routing-controllers", "routing-controllers-openapi"],        
+        "experimentalDecorators": true,
+        "emitDecoratorMetadata": true,
+        "noEmitOnError": true,
+        "skipLibCheck": true
+    },
+    "exclude": [
+        "build",
+        "dist",
+        "**/*.spec.ts",
+        "**/*.d.ts",
+        "vite.config.ts"
+    ]
+}
