@@ -290,8 +290,8 @@ export class PollRoomController {
   }
   //join as cohost
   @Post('/cohost')
-  async joinAsCohost(@Body() body: { token: string, userId: string }) {
-    const resp = await this.roomService.joinAsCohost(body.token, body.userId);
+  async joinAsCohost(@Body() body: { token: string, userId?: string, cohostName?: string }) {
+    const resp = await this.roomService.joinAsCohost(body.token, body.userId, body.cohostName);
     return { success: true, ...resp };
   }
 

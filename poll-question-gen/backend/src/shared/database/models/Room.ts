@@ -29,6 +29,9 @@ const CoHostSchema = new mongoose.Schema(
   {
     userId: { type: String, required: true },
     addedBy: { type: String, required: true },
+    firstName: { type: String },
+    lastName: { type: String },
+    email: { type: String },
     addedAt: {
       type: Date,
       default: Date.now

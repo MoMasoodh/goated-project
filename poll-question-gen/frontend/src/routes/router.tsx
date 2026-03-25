@@ -218,10 +218,17 @@ const teacherPollAnalysisRoute = createRoute({
   component: TeacherPollAnalysis,
 });
 
-// Cohost invite route
+// Cohost invite route (public)
 const cohostInviteRoute = createRoute({
-  getParentRoute: () => teacherLayoutRoute,
+  getParentRoute: () => rootRoute,
   path: '/cohost-invite/$token',
+  component: CohostInvite,
+});
+
+// Legacy cohost invite route kept for backward compatibility
+const legacyCohostInviteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/teacher/cohost-invite/$token',
   component: CohostInvite,
 });
 
@@ -229,8 +236,14 @@ const cohostInviteRoute = createRoute({
 export const teacherPollRoomRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/teacher/pollroom/$code',
-  beforeLoad: () => {
+  beforeLoad: ({ params }) => {
     const { isAuthenticated, user } = useAuthStore.getState();
+    const guestCohostId = localStorage.getItem(`cohost-user-id:${params.code}`);
+
+    if (!isAuthenticated && guestCohostId) {
+      return;
+    }
+
     if (!isAuthenticated) {
       throw redirect({ to: '/auth' });
     }
@@ -339,6 +352,8 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   authRoute,
   roleSelectRoute,
+  cohostInviteRoute,
+  legacyCohostInviteRoute,
   teacherLayoutRoute.addChildren([
     // teacherGenAIHomeRoute,
     teacherPollRoomRoute,
@@ -349,7 +364,6 @@ const routeTree = rootRoute.addChildren([
     teacherManageRoomsRoute,
     teacherCohostedRoomsRoute,
     teacherPollAnalysisRoute,
-    cohostInviteRoute,
   ]),
   studentLayoutRoute.addChildren([
     studentPollRoomRoute,

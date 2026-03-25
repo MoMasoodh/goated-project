@@ -25,6 +25,13 @@ export interface Poll {
   approvedAt?: Date;
 }
 
+export interface RoomParticipant {
+  _id: string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+}
+
 export interface Room {
   roomCode: string;
   name: string;
@@ -41,6 +48,7 @@ export interface Room {
     pollRestricted: boolean;
   };
   joinedStudents?: string[];
+  students?: RoomParticipant[];
 }
 
 export interface CohostJwtPayload extends JwtPayload {
@@ -59,5 +67,6 @@ export interface ActiveCohost {
   lastName: string;
   email: string;
   addedAt: Date;
+  isMicMuted?: boolean;
 }
 

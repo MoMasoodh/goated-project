@@ -31,7 +31,7 @@ export class RoomService {
   }
 
   async getRoomByCode(code: string): Promise<RoomType | null> {
-    const room = await Room.findOne({ roomCode: code }).populate('students', 'firstName email').lean();
+    const room = await Room.findOne({ roomCode: code }).populate('students', 'firstName lastName email').lean();
     return room ? this.mapRoom(room) : null;
   }
 
@@ -209,6 +209,22 @@ export class RoomService {
    * Map Mongoose Room Document to plain RoomType matching interface
    */
   private mapRoom(roomDoc: any): RoomType {
+    const normalizedStudents = (roomDoc.students || []).map((student: any) => {
+      if (!student) {
+        return null;
+      }
+
+      const rawId = student._id ?? student;
+      const id = typeof rawId?.toString === 'function' ? rawId.toString() : String(rawId);
+
+      return {
+        _id: id,
+        firstName: student.firstName,
+        lastName: student.lastName,
+        email: student.email
+      };
+    }).filter(Boolean);
+
     return {
       roomCode: roomDoc.roomCode,
       name: roomDoc.name,
@@ -217,7 +233,8 @@ export class RoomService {
       endedAt: roomDoc.endedAt,
       status: roomDoc.status,
       // Safely handle populated objects (s._id) or raw strings
-      totalStudents: new Set(roomDoc.students?.map((s: any) => s._id ? s._id.toString() : s.toString()) || []).size,
+      totalStudents: new Set(normalizedStudents.map((s: any) => s._id)).size,
+      students: normalizedStudents as any,
       coHosts: roomDoc.coHosts,
       controls: roomDoc.controls || { micBlocked: false, pollRestricted: false },
       polls: (roomDoc.polls || []).map((p: any): Poll => ({
@@ -423,61 +440,116 @@ export class RoomService {
     await room.save();
 
     const inviteBaseUrl = appConfig.publicUrl.replace(/\/+$/, '');
-    return `${inviteBaseUrl}/teacher/cohost-invite/${token}`
+    return `${inviteBaseUrl}/cohost-invite/${token}`
 
   }
 
   //join as cohost
-  async joinAsCohost(token: string, userId: string): Promise<{ message: string, roomId: string }> {
+  async joinAsCohost(token: string, userId?: string, cohostName?: string): Promise<{ message: string, roomId: string, cohostId: string }> {
+    console.log('[joinAsCohost] Starting cohost join flow with token:', token.substring(0, 20) + '...');
 
-    const decoded = jwt.verify(
-      token,
-      process.env.COHOST_INVITE_SECRET
-    ) as CohostJwtPayload;
+    let decoded: CohostJwtPayload;
+    try {
+      decoded = jwt.verify(
+        token,
+        process.env.COHOST_INVITE_SECRET
+      ) as CohostJwtPayload;
+      console.log('[joinAsCohost] JWT decoded successfully. roomId:', decoded.roomId, 'jti:', decoded.jti);
+    } catch (err: any) {
+      console.error('[joinAsCohost] JWT verification failed:', err.message);
+      throw new HttpError(400, err.message === 'jwt expired' ? 'jwt expired' : 'Invalid token');
+    }
+
+    console.log('[joinAsCohost] Looking up room with code:', decoded.roomId);
     const room = await Room.findOne({ roomCode: decoded.roomId });
-    if (!room || room.status !== "active") {
-      throw new HttpError(400, "Invalid room")
+    
+    if (!room) {
+      console.error('[joinAsCohost] Room not found with code:', decoded.roomId);
+      throw new HttpError(400, "Invalid room");
     }
-    if (
-      !room.coHostInvite.isActive ||
-      room.coHostInvite.inviteId !== decoded.jti ||
-      room.coHostInvite.expiresAt < new Date()
-    ) {
-      throw new HttpError(400, "Invite invalid or expired")
+    
+    console.log('[joinAsCohost] Room found. Status:', room.status, 'Teaching ID:', room.teacherId);
+    
+    if (room.status !== "active") {
+      console.error('[joinAsCohost] Room is not active. Current status:', room.status);
+      throw new HttpError(400, "Invalid room");
     }
 
-    if (room.teacherId === userId) {
+    // Defensive check for coHostInvite object
+    console.log('[joinAsCohost] Checking coHostInvite. Invite object exists?', !!room.coHostInvite);
+    
+    if (!room.coHostInvite) {
+      console.error('[joinAsCohost] coHostInvite object is missing. Room coHosts:', room.coHosts.length);
+      throw new HttpError(400, "Invite invalid or expired");
+    }
+
+    console.log('[joinAsCohost] Invite details - isActive:', room.coHostInvite.isActive, 'inviteId:', room.coHostInvite.inviteId, 'expiresAt:', room.coHostInvite.expiresAt);
+
+    if (!room.coHostInvite.isActive) {
+      console.error('[joinAsCohost] Invite is not active');
+      throw new HttpError(400, "Invite invalid or expired");
+    }
+
+    if (room.coHostInvite.inviteId !== decoded.jti) {
+      console.error('[joinAsCohost] Invite JTI mismatch. Expected:', room.coHostInvite.inviteId, 'Got:', decoded.jti);
+      throw new HttpError(400, "Invite invalid or expired");
+    }
+
+    if (room.coHostInvite.expiresAt && room.coHostInvite.expiresAt < new Date()) {
+      console.error('[joinAsCohost] Invite expired. Expires at:', room.coHostInvite.expiresAt, 'Now:', new Date());
+      throw new HttpError(400, "Invite invalid or expired");
+    }
+
+    if (userId && room.teacherId === userId) {
+      console.warn('[joinAsCohost] Host attempting to join as cohost. userId:', userId);
       throw new HttpError(400, "Host cannot join as cohost");
     }
 
-    const user = await UserModel.findOne({
-      firebaseUID:
-        userId
-    });
-    if (user.role !== "teacher") {
-      throw new HttpError(403, "Only teachers allowed")
-    }
+    const safeUserId = userId?.trim() || `cohost-${uuidv4()}`;
+    const safeName = (cohostName || "Cohost").trim() || "Cohost";
+    const [firstName, ...rest] = safeName.split(/\s+/);
+    const lastName = rest.join(" ");
+
+    console.log('[joinAsCohost] Creating cohost profile. userId:', safeUserId, 'name:', safeName);
+
+    const user = userId
+      ? await UserModel.findOne({ firebaseUID: userId }).lean()
+      : null;
+
+    const resolvedFirstName = user?.firstName || firstName;
+    const resolvedLastName = user?.lastName || lastName || "Guest";
+    const resolvedEmail = user?.email || `${safeUserId}@cohost.local`;
 
     const already = room.coHosts.find(
-      c => c.userId.toString() === userId && c.isActive
+      c => c.userId.toString() === safeUserId && c.isActive
     );
 
     if (!already) {
+      console.log('[joinAsCohost] Adding new cohost to room');
       room.coHosts.push({
-        userId,
-        addedBy: room.teacherId
+        userId: safeUserId,
+        addedBy: room.teacherId,
+        firstName: resolvedFirstName,
+        lastName: resolvedLastName,
+        email: resolvedEmail
       });
+    } else {
+      console.log('[joinAsCohost] Cohost already exists, skipping duplicate');
     }
 
     await room.save();
+    console.log('[joinAsCohost] Room saved successfully. Total cohosts:', room.coHosts.length);
 
     // Get updated cohost list with full details
     const activeCohosts = await this.getRoomCohosts(room.teacherId, decoded.roomId);
+    console.log('[joinAsCohost] Broadcasting cohost-joined event with', activeCohosts.length, 'active cohosts');
+    
     pollSocket?.emitToRoom(decoded.roomId, 'cohost-joined', {
       activeCohosts: activeCohosts
     });
 
-    return { message: "Joined as cohost", roomId: room.roomCode }
+    console.log('[joinAsCohost] Join successful. Cohost ID:', safeUserId);
+    return { message: "Joined as cohost", roomId: room.roomCode, cohostId: safeUserId };
 
   }
 
@@ -580,15 +652,18 @@ export class RoomService {
         }
       },
       {
-        $unwind: "$cohostUser"
+        $unwind: {
+          path: "$cohostUser",
+          preserveNullAndEmptyArrays: true
+        }
       },
       {
         $project: {
           _id: 0,
-          userId: "$cohostUser.firebaseUID",
-          firstName: "$cohostUser.firstName",
-          lastName: "$cohostUser.lastName",
-          email: "$cohostUser.email",
+          userId: { $ifNull: ["$cohostUser.firebaseUID", "$coHosts.userId"] },
+          firstName: { $ifNull: ["$cohostUser.firstName", "$coHosts.firstName"] },
+          lastName: { $ifNull: ["$cohostUser.lastName", "$coHosts.lastName"] },
+          email: { $ifNull: ["$cohostUser.email", "$coHosts.email"] },
           addedAt: "$coHosts.addedAt",
           isMicMuted: "$coHosts.isMicMuted"
         }

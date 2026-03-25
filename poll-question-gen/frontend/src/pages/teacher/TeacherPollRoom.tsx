@@ -100,12 +100,14 @@ export default function TeacherPollRoom() {
   const { showModal, modalProps } = useConfirmationModal();
   const roomCode: string = params.code as string;
   const { user: currentUser } = useAuthStore();
+  const guestCohostId = localStorage.getItem(`cohost-user-id:${roomCode}`);
+  const currentUserId = currentUser?.uid || guestCohostId || undefined;
   const [_isTranscriptionSettling, _setIsTranscriptionSettling] = useState(false);
   const [isCreating, setIsCreating] = useState(false)
   const [inviteLink, setInviteLink] = useState('')
   const [inviteLinkExpiresAt, setInviteLinkExpiresAt] = useState<number | null>(null);
   const INVITE_TTL_MS = 30 * 60 * 1000;
-  const inviteStorageKey = `cohost-invite-link:${roomCode}:${currentUser?.uid ?? "anonymous"}`;
+  const inviteStorageKey = `cohost-invite-link:${roomCode}:${currentUserId ?? "anonymous"}`;
 
   const clearInviteLink = useCallback(() => {
     setInviteLink('');
@@ -114,7 +116,11 @@ export default function TeacherPollRoom() {
   }, [inviteStorageKey]);
 
   useEffect(() => {
-    if (!currentUser?.uid || !roomCode) return;
+    // Prevent previous room invite links from leaking into the current room view.
+    setInviteLink('');
+    setInviteLinkExpiresAt(null);
+
+    if (!currentUserId || !roomCode) return;
 
     const raw = localStorage.getItem(inviteStorageKey);
     if (!raw) return;
@@ -131,7 +137,7 @@ export default function TeacherPollRoom() {
     } catch {
       localStorage.removeItem(inviteStorageKey);
     }
-  }, [currentUser?.uid, roomCode, inviteStorageKey]);
+  }, [currentUserId, roomCode, inviteStorageKey]);
 
   useEffect(() => {
     if (!inviteLink || !inviteLinkExpiresAt) return;
@@ -161,14 +167,14 @@ export default function TeacherPollRoom() {
   // 1. Fetch Cohosts API 
   const fetchCohosts = useCallback(async () => {
     try {
-      const host = hostId || currentUser?.uid;
+      const host = hostId || currentUserId;
       if (!host || !roomCode) return;
       const res = await api.get(`/livequizzes/rooms/cohost/${host}/${roomCode}`);
       setCohosts(res.data.activeCohosts || []);
     } catch (error) {
       console.error("Error fetching cohosts:", error);
     }
-  }, [currentUser?.uid, roomCode, hostId,]);
+  }, [currentUserId, roomCode, hostId,]);
 
   useEffect(() => {
     fetchCohosts();
@@ -219,7 +225,7 @@ export default function TeacherPollRoom() {
     try {
 
       await api.patch(`/livequizzes/rooms/cohost/${roomCode}`, {
-        teacherId: currentUser?.uid,
+        teacherId: currentUserId,
         userId: cohostId
       });
       toast.success("Co-host removed successfully");
@@ -230,20 +236,20 @@ export default function TeacherPollRoom() {
   };
 
 
-  const isHost = currentUser?.uid === hostId;
+  const isHost = currentUserId === hostId;
 
   //handle invite cohost
   const handleInviteCohost = async () => {
 
     setIsCreating(true);
     try {
-      if (!currentUser?.uid) {
+      if (!currentUserId || !isHost) {
         toast.error("Authentication required to create assessments");
         return;
       }
 
       const res = await api.post(`/livequizzes/rooms/cohost/${roomCode}`, {
-        userId: currentUser.uid
+        userId: currentUserId
       });
       toast.success("Invite Link created successfully!");
       setInviteLink(res.data.inviteLink);
@@ -256,7 +262,7 @@ export default function TeacherPollRoom() {
     }
   };
 
-  const LeaveCohost = async (roomCode: string, cohostId: string) => {
+  const LeaveCohost = async (roomCode: string, cohostId?: string) => {
     //confirmation before proceeding
     const confirmed = await showModal({
       type: 'default',
@@ -267,14 +273,16 @@ export default function TeacherPollRoom() {
     })
 
     if (!confirmed) return;
+    if (!cohostId) return;
     socket.emit('cohost-leave', roomCode, cohostId)
     toast.info("Left the room.");
+    localStorage.removeItem(`cohost-user-id:${roomCode}`);
     navigate({ to: `/teacher/cohosted-rooms` });
   }
 
   //handle cohost mic mute or unmute toggle
   const handleToggleCohostMic = async (cohostId: string, isMicMuted: boolean) => {
-    if (!cohostId || !currentUser?.uid) return;
+    if (!cohostId || !currentUserId) return;
     // instant UI change
     setCohosts(prev =>
       prev.map(c =>
@@ -1446,6 +1454,7 @@ export default function TeacherPollRoom() {
         teacherId: currentUser?.uid,
       });
 
+      clearInviteLink();
       toast.success("Room ended successfully");
       navigate({ to: '/teacher/pollroom' });
     } catch (error) {
