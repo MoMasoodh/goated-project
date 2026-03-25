@@ -22,6 +22,16 @@ class PollSocket {
     // private readonly userService:UserService
   ) { }
 
+  private removeRoomFromActiveConnections(socketId: string, roomCode: string) {
+    const rooms = this.activeConnections.get(socketId) || [];
+    const updatedRooms = rooms.filter(r => r !== roomCode);
+    if (updatedRooms.length > 0) {
+      this.activeConnections.set(socketId, updatedRooms);
+    } else {
+      this.activeConnections.delete(socketId);
+    }
+  }
+
   init(server: import('http').Server) {
     this.io = new Server(server, {
       cors: { origin: appOrigins || 'http://localhost:3000' },
@@ -32,15 +42,42 @@ class PollSocket {
     this.io.on('connection', socket => {
       console.log('Client connected', socket.id);
 
-      socket.on('join-room', async (roomCode: string, email: string) => {
+      socket.on('join-room', async (
+        roomCode: string,
+        emailOrAck?: string | ((response: { status: string; message?: string }) => void),
+        userIdOrAck?: string | ((response: { status: string; message?: string }) => void),
+        maybeAck?: (response: { status: string; message?: string }) => void
+      ) => {
         try {
+          let email: string | undefined;
+          let participantUserId: string | undefined;
+          let ack: ((response: { status: string; message?: string }) => void) | undefined;
+
+          if (typeof emailOrAck === 'string') {
+            email = emailOrAck;
+          } else if (typeof emailOrAck === 'function') {
+            ack = emailOrAck;
+          }
+
+          if (typeof userIdOrAck === 'string') {
+            participantUserId = userIdOrAck;
+          } else if (typeof userIdOrAck === 'function') {
+            ack = userIdOrAck;
+          }
+
+          if (typeof maybeAck === 'function') {
+            ack = maybeAck;
+          }
+
           const isActive = await this.roomService.isRoomValid(roomCode);
           if (typeof email === 'string' && email.trim() !== '') {
             const user = await this.userRepo.findByEmail(email)
             console.log('user:', user)
             const userId = user?._id;
-            socket.data.userId = user?.firebaseUID;
+            socket.data.userId = user?.firebaseUID || participantUserId;
             await this.roomService.enrollStudent(userId as string, roomCode, user?.firebaseUID as string)
+          } else if (participantUserId) {
+            socket.data.userId = participantUserId;
           }
           if (isActive) {
             socket.join(roomCode);
@@ -61,13 +98,22 @@ class PollSocket {
             console.log('room:', room)
             console.log(`Socket ${socket.id} joined active room: ${roomCode}`);
             console.log(`Active connections: ${this.activeConnections.size}`);
+            ack?.({ status: 'ok' });
           } else {
             console.log(`Join failed: room ended or invalid: ${roomCode}`);
             socket.emit('room-ended');  // immediately tell the client
+            ack?.({ status: 'error', message: 'Room ended or invalid' });
           }
         } catch (err) {
           console.error('Error checking room status:', err);
           socket.emit('error', 'Unexpected server error');
+          if (typeof emailOrAck === 'function') {
+            emailOrAck({ status: 'error', message: 'Unexpected server error' });
+          } else if (typeof userIdOrAck === 'function') {
+            userIdOrAck({ status: 'error', message: 'Unexpected server error' });
+          } else {
+            maybeAck?.({ status: 'error', message: 'Unexpected server error' });
+          }
         }
       });
 
@@ -160,23 +206,33 @@ class PollSocket {
       });
 
       socket.on('cohost-leave', async (roomCode: string, cohostId: string) => {
-        const room = await Room.findOne({ roomCode });
-        const teacherId = room.teacherId
-        if (!room) {
-          throw new NotFoundError("Room is not found")
-        }
-        room.coHosts.forEach(c => {
-          if (c.userId === cohostId) {
-            c.isActive = false;
+        try {
+          const room = await Room.findOne({ roomCode });
+          if (!room) {
+            throw new NotFoundError("Room is not found")
           }
-        });
-        await room.save();
-        // Get updated cohost list
-        const activeCohosts = await this.roomService.getRoomCohosts(teacherId, roomCode);
-        this.emitToRoom(roomCode, 'cohost-left', {
-          removedUserId: cohostId,
-          activeCohosts: activeCohosts
-        });
+          const cohost = room.coHosts.find(c => c.userId === cohostId && c.isActive);
+          if (!cohost) {
+            throw new NotFoundError('Active co-host not found');
+          }
+
+          cohost.isActive = false;
+          await room.save();
+
+          this.forceRemoveUserFromRoom(roomCode, cohostId, 'cohost-force-exit', {
+            reason: 'left_voluntarily'
+          });
+
+          const activeCohosts = await this.roomService.getRoomCohosts(room.teacherId, roomCode);
+          this.emitToRoom(roomCode, 'cohost-exited', {
+            removedUserId: cohostId,
+            reason: 'left_voluntarily',
+            activeCohosts
+          });
+        } catch (err) {
+          console.error('cohost leave error', err);
+          socket.emit('error', 'Failed to leave as cohost');
+        }
       })
 
       socket.on('disconnect', () => {
@@ -225,6 +281,28 @@ class PollSocket {
         socket.emit(event, data);
       }
     });
+  }
+
+  forceRemoveUserFromRoom(roomCode: string, userId: string, event = 'cohost-force-exit', data: Record<string, unknown> = {}) {
+    if (!this.io) {
+      console.error('Socket.IO not initialized');
+      return 0;
+    }
+
+    let removedCount = 0;
+    this.io.sockets.sockets.forEach((socket) => {
+      if (socket.data.userId !== userId || !socket.rooms.has(roomCode)) {
+        return;
+      }
+
+      socket.leave(roomCode);
+      socket.emit(event, { roomCode, ...data });
+      this.removeRoomFromActiveConnections(socket.id, roomCode);
+      removedCount += 1;
+    });
+
+    this.activeUsersPerRoom.get(roomCode)?.delete(userId);
+    return removedCount;
   }
 }
 const userService = getFromContainer(UserService)

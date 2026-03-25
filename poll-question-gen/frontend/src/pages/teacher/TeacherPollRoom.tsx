@@ -222,6 +222,8 @@ export default function TeacherPollRoom() {
     })
 
     if (!confirmed) return;
+    const previousCohosts = [...cohosts];
+    setCohosts(prev => prev.filter(c => c.userId !== cohostId));
     try {
 
       await api.patch(`/livequizzes/rooms/cohost/${roomCode}`, {
@@ -230,6 +232,7 @@ export default function TeacherPollRoom() {
       });
       toast.success("Co-host removed successfully");
     } catch (error) {
+      setCohosts(previousCohosts);
       console.error("Error removing cohost:", error);
       toast.error("Failed to remove co-host");
     }
@@ -574,7 +577,7 @@ export default function TeacherPollRoom() {
 
     // Join room function
     const joinRoom = () => {
-      socket.emit('join-room', roomCode, (response: any) => {
+      socket.emit('join-room', roomCode, currentUser?.email, currentUserId, (response: any) => {
         if (response?.status === 'error') {
           // Error joining room
         } else {
@@ -621,7 +624,8 @@ export default function TeacherPollRoom() {
       socket.off('error');
       socket.off('poll-results-updated');
       socket.off('cohost-joined');
-      socket.off('cohost-removed');
+      socket.off('cohost-exited');
+      socket.off('cohost-force-exit');
       socket.off('room-ended');
       socket.off('cohost-mic-updated');
       // PHASE 2 & 3: Clear new event listeners
@@ -662,23 +666,30 @@ export default function TeacherPollRoom() {
         setCohosts(data.activeCohosts || []);
         toast.success('A co-host has joined the room');
       });
-      socket.on('cohost-removed', (data) => {
+      socket.on('cohost-exited', (data) => {
         setCohosts(data.activeCohosts || []);
-        if (currentUser?.uid === data.removedUserId) {
+        if (currentUserId === data.removedUserId) {
+          localStorage.removeItem(`cohost-user-id:${roomCode}`);
           toast.error('You have been removed as co-host');
           navigate({ to: '/teacher/cohosted-rooms' });
           return;
         }
-        toast.info('A co-host was left the room');
-      });
-      socket.on('cohost-left', (data) => {
-        setCohosts(data.activeCohosts || []);
-        if (currentUser?.uid === data.removedUserId) {
-          toast.error('You left the room');
-          navigate({ to: '/teacher/cohosted-rooms' });
-          return;
+        if (data?.reason === 'left_voluntarily') {
+          toast.info('A co-host left the room');
+        } else if (data?.reason === 'removed_by_host') {
+          toast.info('A co-host was removed from the room');
         }
-        toast.info('A co-host left the room');
+      });
+
+      socket.on('cohost-force-exit', (data) => {
+        if (data?.roomCode !== roomCode) return;
+        localStorage.removeItem(`cohost-user-id:${roomCode}`);
+        if (data?.reason === 'room_ended') {
+          toast.info('Room has ended');
+        } else {
+          toast.error('You have been removed as co-host');
+        }
+        navigate({ to: '/teacher/cohosted-rooms' });
       });
 
       socket.on('room-ended', (data) => {
@@ -785,7 +796,8 @@ export default function TeacherPollRoom() {
       socket.emit('leave-room', roomCode, null);
       socket.off('roomControlsUpdated');
       socket.off('cohost-joined');
-      socket.off('cohost-removed');
+      socket.off('cohost-exited');
+      socket.off('cohost-force-exit');
       socket.off('room-ended');
       socket.off('cohost-mic-updated');
       // PHASE 2 & 3: Cleanup new event listeners

@@ -180,6 +180,15 @@ export class RoomService {
 
   async endRoom(code: string, teacherId: string): Promise<boolean> {
     const updated = await Room.findOneAndUpdate({ roomCode: code, teacherId }, { status: 'ended', endedAt: new Date() }, { new: true }).lean();
+    if (updated?.coHosts?.length) {
+      updated.coHosts
+        .filter((cohost: any) => cohost?.isActive && cohost?.userId)
+        .forEach((cohost: any) => {
+          pollSocket?.forceRemoveUserFromRoom(code, cohost.userId, 'cohost-force-exit', {
+            reason: 'room_ended'
+          });
+        });
+    }
     pollSocket?.emitToRoom(code, 'room-ended', {
       message: 'Room has ended'
     });
@@ -682,16 +691,23 @@ export class RoomService {
     if (room.teacherId !== teacherId) {
       throw new HttpError(400, "Invalid room")
     }
-    room.coHosts.forEach(c => {
-      if (c.userId === userId) {
-        c.isActive = false;
-      }
-    });
+    const targetCohost = room.coHosts.find(c => c.userId === userId && c.isActive);
+    if (!targetCohost) {
+      throw new NotFoundError('Active co-host not found');
+    }
+
+    targetCohost.isActive = false;
     await room.save();
+
+    pollSocket?.forceRemoveUserFromRoom(roomCode, userId, 'cohost-force-exit', {
+      reason: 'removed_by_host'
+    });
+
     // Get updated cohost list
     const activeCohosts = await this.getRoomCohosts(teacherId, roomCode);
-    pollSocket?.emitToRoom(roomCode, 'cohost-removed', {
+    pollSocket?.emitToRoom(roomCode, 'cohost-exited', {
       removedUserId: userId,
+      reason: 'removed_by_host',
       activeCohosts: activeCohosts
     });
     return { message: 'coHost removed successfully' }
