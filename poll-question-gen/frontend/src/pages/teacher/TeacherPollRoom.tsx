@@ -519,25 +519,32 @@ export default function TeacherPollRoom() {
   };
 
   const handleToggleStudentMute = async (studentId: string, isMuted: boolean) => {
+    if (!currentUserId) {
+      toast.error('Only host or co-host can manage student mute');
+      return;
+    }
+
+    const previousMutedStudents = new Set(mutedStudents);
+    setMutedStudents(prev => {
+      const next = new Set(prev);
+      if (isMuted) {
+        next.add(studentId);
+      } else {
+        next.delete(studentId);
+      }
+      return next;
+    });
+
     try {
       const response = await api.patch(
         `/livequizzes/rooms/${roomCode}/students/${studentId}/mute`,
-        { userId: currentUser?.uid, isMuted }
+        { userId: currentUserId, isMuted }
       );
       if (response.data.success) {
-        if (isMuted) {
-          setMutedStudents(prev => new Set([...prev, studentId]));
-          toast.success('Student muted');
-        } else {
-          setMutedStudents(prev => {
-            const next = new Set(prev);
-            next.delete(studentId);
-            return next;
-          });
-          toast.success('Student unmuted');
-        }
+        toast.success(isMuted ? 'Student muted' : 'Student unmuted');
       }
     } catch (error) {
+      setMutedStudents(previousMutedStudents);
       toast.error('Failed to update student mute status');
       console.error(error);
     }
@@ -702,7 +709,11 @@ export default function TeacherPollRoom() {
 
       socket.on('room-updated', (updatedRoom) => {
         // console.log('Room updated:', updatedRoom);
-        setStudents(updatedRoom.students || []);
+        const filteredStudents = (updatedRoom.students || []).filter((student: any) => {
+          const studentUid = student?.firebaseUID;
+          return studentUid !== updatedRoom.teacherId;
+        });
+        setStudents(filteredStudents);
 
         // Save Host ID for conditional UI rendering
         if (updatedRoom.teacherId) {
@@ -2372,9 +2383,10 @@ export default function TeacherPollRoom() {
                                 >
                                   {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
                                 </button>
-                                <Trash2
-                                  size={18}
-                                  className="
+                                {isHost && (
+                                  <Trash2
+                                    size={18}
+                                    className="
                   text-red-500
                   cursor-pointer
                   opacity-100
@@ -2382,8 +2394,9 @@ export default function TeacherPollRoom() {
                   hover:text-red-700 hover:scale-110
                   flex-shrink-0
                 "
-                                  onClick={() => handleRemoveStudent(student.email)}
-                                />
+                                    onClick={() => handleRemoveStudent(student.email)}
+                                  />
+                                )}
                               </div>
                             )}
 

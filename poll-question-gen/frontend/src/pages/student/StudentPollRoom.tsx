@@ -102,6 +102,8 @@ export default function StudentPollRoom() {
       socket.off('disconnect');
       socket.off('live-poll-results');  
       socket.off('badge-earned');
+      socket.off('you-have-been-muted');
+      socket.off('you-have-been-unmuted');
 
       socket.on("new-poll", (poll: Poll) => {
         setLivePolls(prev => [...prev, poll]);
@@ -120,6 +122,14 @@ export default function StudentPollRoom() {
         if (data?.userId !== user?.uid) return;
         const unlocked = data.badges || [];
         setBadgePopupQueue((prev) => [...prev, ...unlocked]);
+      });
+
+      socket.on('you-have-been-muted', () => {
+        toast.error('You have been muted');
+      });
+
+      socket.on('you-have-been-unmuted', () => {
+        toast.success('You have been unmuted');
       });
 
       socket.on('connect', () => {
@@ -152,6 +162,8 @@ export default function StudentPollRoom() {
       socket.off('disconnect');
       socket.off('live-poll-results');  
       socket.off('badge-earned');
+      socket.off('you-have-been-muted');
+      socket.off('you-have-been-unmuted');
     };
   }, [roomCode, navigate, user?.uid]);
 

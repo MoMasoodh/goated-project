@@ -70,12 +70,16 @@ class PollSocket {
           }
 
           const isActive = await this.roomService.isRoomValid(roomCode);
+          const room = await this.roomService.getRoomByCode(roomCode);
           if (typeof email === 'string' && email.trim() !== '') {
             const user = await this.userRepo.findByEmail(email)
             console.log('user:', user)
             const userId = user?._id;
             socket.data.userId = user?.firebaseUID || participantUserId;
-            await this.roomService.enrollStudent(userId as string, roomCode, user?.firebaseUID as string)
+            const isTeacherJoiningAsParticipant = !!user?.firebaseUID && room?.teacherId === user.firebaseUID;
+            if (userId && !isTeacherJoiningAsParticipant) {
+              await this.roomService.enrollStudent(userId as string, roomCode, user?.firebaseUID as string)
+            }
           } else if (participantUserId) {
             socket.data.userId = participantUserId;
           }
@@ -92,10 +96,10 @@ class PollSocket {
               }
               this.activeUsersPerRoom.get(roomCode)!.add(socket.data.userId);
             }
-            const room = await this.roomService.getRoomByCode(roomCode)
+            const latestRoom = await this.roomService.getRoomByCode(roomCode)
             // socket.emit('room-data',room)
-            this.emitToRoom(roomCode, 'room-updated', room)
-            console.log('room:', room)
+            this.emitToRoom(roomCode, 'room-updated', latestRoom)
+            console.log('room:', latestRoom)
             console.log(`Socket ${socket.id} joined active room: ${roomCode}`);
             console.log(`Active connections: ${this.activeConnections.size}`);
             ack?.({ status: 'ok' });

@@ -228,11 +228,12 @@ export class RoomService {
 
       return {
         _id: id,
+        firebaseUID: student.firebaseUID,
         firstName: student.firstName,
         lastName: student.lastName,
         email: student.email
       };
-    }).filter(Boolean);
+    }).filter((student: any) => student && student.firebaseUID !== roomDoc.teacherId);
 
     return {
       roomCode: roomDoc.roomCode,
@@ -267,6 +268,9 @@ export class RoomService {
     const room = await Room.findOne({ roomCode })
     if (!room) {
       throw new NotFoundError("Room is not found")
+    }
+    if (room.teacherId === firebaseUID) {
+      return room;
     }
     const userObjectId = new ObjectId(userId)
     // const existingStudent = await Room.findOne({students:{$in:[userObjectId]}})
